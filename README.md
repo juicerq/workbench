@@ -9,11 +9,10 @@ Local, temporary coordination for conversational implementation work.
 Requires [Bun](https://bun.sh/).
 
 ```sh
-bun install
-bun link
+bun install --global github:juicerq/grill-workbench
 ```
 
-This exposes the `grill` executable from the local checkout.
+This installs the dependencies and exposes the `grill` executable. Run the same command again to update it.
 
 ## Workflow
 
