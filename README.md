@@ -1,4 +1,4 @@
-# grill-workbench
+# workbench
 
 Local, temporary coordination for conversational implementation work.
 
@@ -9,7 +9,7 @@ Local, temporary coordination for conversational implementation work.
 Requires [Bun](https://bun.sh/).
 
 ```sh
-bun install --global github:juicerq/grill-workbench
+bun install --global github:juicerq/workbench
 ```
 
 This installs the dependencies and exposes the `grill` executable. Run the same command again to update it.
@@ -33,11 +33,11 @@ grill close --repo "$PWD" --outcome completed
 
 Outside Codex, add `--conversation <stable-conversation-id>` to every command. Markdown content should cross the CLI boundary through temporary files outside the product repository.
 
-The full conversational adapter contract lives in the companion `agent-setup` skill at `skills/grill-workbench/CONTRACT.md`.
+The full conversational adapter contract lives in the companion `agent-setup` skill at `skills/workbench/CONTRACT.md`.
 
 ## Storage and lifecycle
 
-Data lives under `$XDG_DATA_HOME/grill-workbench`, or `~/.local/share/grill-workbench` when `XDG_DATA_HOME` is unset. Repositories are identified by normalized Git remote, so separate clones share the same local work namespace.
+Set `WORKBENCH_HOME` to use a dedicated data root. Otherwise, data lives under `$XDG_DATA_HOME/workbench`, or `~/.local/share/workbench` when `XDG_DATA_HOME` is unset. Repositories are identified by normalized Git remote, so separate clones share the same local work namespace.
 
 Active work is never deleted automatically. It is reported as stale after seven days without artifact activity. Work closed as `completed`, `abandoned`, or `superseded` is deleted opportunistically after seven days.
 

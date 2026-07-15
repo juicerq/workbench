@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { CliSchemas } from "./schemas"
+import { storageAccessErrorMessage } from "./storage"
 import { Workbench } from "./workbench"
 
 function parseOptions(args: string[]) {
@@ -30,6 +31,15 @@ function conversation(options: Record<string, string>) {
 	}
 
 	throw new Error("--conversation or CODEX_THREAD_ID is required")
+}
+
+function errorMessage(error: unknown) {
+	const storageMessage = storageAccessErrorMessage(error)
+	if (storageMessage) {
+		return storageMessage
+	}
+
+	return error instanceof Error ? error.message : String(error)
 }
 
 async function resolveContentFile(options: Record<string, string>) {
@@ -126,6 +136,6 @@ async function main() {
 await main()
 	.then((result) => Bun.write(Bun.stdout, `${JSON.stringify(result)}\n`))
 	.catch((error) => {
-		console.error(error instanceof Error ? error.message : String(error))
+		console.error(errorMessage(error))
 		process.exitCode = 1
 	})

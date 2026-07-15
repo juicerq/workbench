@@ -21,6 +21,7 @@ import {
 	type WorkItem,
 } from "./schemas"
 import { TaskCoordination } from "./task-coordination"
+import { storageRoot } from "./storage"
 
 type ActiveWorkItem = Extract<WorkItem, { outcome: "active" }>
 
@@ -41,21 +42,9 @@ function digest(value: string) {
 	return new Bun.CryptoHasher("sha256").update(value).digest("hex")
 }
 
-function dataRoot() {
-	if (Bun.env.XDG_DATA_HOME) {
-		return join(Bun.env.XDG_DATA_HOME, "grill-workbench")
-	}
-
-	if (Bun.env.HOME) {
-		return join(Bun.env.HOME, ".local", "share", "grill-workbench")
-	}
-
-	throw new Error("XDG_DATA_HOME or HOME is required")
-}
-
 async function repositoryDirectory(repositoryPath: string) {
 	const { repository } = await observeGitContext(repositoryPath)
-	const directory = join(dataRoot(), "repositories", digest(repository))
+	const directory = join(storageRoot(), "repositories", digest(repository))
 
 	await cleanupExpiredWork(directory).catch(() => {})
 

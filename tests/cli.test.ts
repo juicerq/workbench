@@ -26,9 +26,12 @@ async function setArtifactActivity(directory: string, at: Date) {
 }
 
 async function run(command: string[], environment: Record<string, string>) {
+	const processEnvironment = { ...Bun.env }
+	delete processEnvironment.WORKBENCH_HOME
+	delete processEnvironment.XDG_DATA_HOME
 	const process = Bun.spawn(["bun", "run", cliPath, ...command], {
 		cwd: projectRoot,
-		env: { ...Bun.env, ...environment },
+		env: { ...processEnvironment, ...environment },
 		stderr: "pipe",
 		stdout: "pipe",
 	})
@@ -40,6 +43,102 @@ async function run(command: string[], environment: Record<string, string>) {
 
 	return { exitCode, stdout, stderr }
 }
+
+describe("storage configuration", () => {
+	test("prefers WORKBENCH_HOME as the direct data root", async () => {
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
+		temporaryDirectories.push(root)
+		const repository = await createRepository(root, "repository")
+		const workbenchHome = join(root, "dedicated-data")
+		const xdgDataHome = join(root, "xdg-data")
+
+		const started = await run([
+			"start",
+			"--repo",
+			repository,
+			"--conversation",
+			"conversation-1",
+			"--name",
+			"Dedicated storage",
+		], {
+			WORKBENCH_HOME: workbenchHome,
+			XDG_DATA_HOME: xdgDataHome,
+		})
+
+		expect(started.stderr).toBe("")
+		expect(started.exitCode).toBe(0)
+		expect(JSON.parse(started.stdout).directory.startsWith(workbenchHome)).toBe(true)
+		expect(await pathExists(join(xdgDataHome, "workbench"))).toBe(false)
+	})
+
+	test("reports a writable storage override when the data root is read-only", async () => {
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
+		temporaryDirectories.push(root)
+		const repository = await createRepository(root, "repository")
+		const readOnlyRoot = join("/sys", `workbench-${crypto.randomUUID()}`)
+
+		const started = await run([
+			"start",
+			"--repo",
+			repository,
+			"--conversation",
+			"conversation-1",
+			"--name",
+			"Read-only storage",
+		], { WORKBENCH_HOME: readOnlyRoot })
+
+		expect(started.exitCode).toBe(1)
+		expect(started.stdout).toBe("")
+		expect(started.stderr).toContain(readOnlyRoot)
+		expect(started.stderr).toContain("WORKBENCH_HOME")
+	})
+
+	test("preserves permission errors outside the data root", async () => {
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
+		temporaryDirectories.push(root)
+		const repository = await createRepository(root, "repository")
+
+		const result = await run([
+			"spec-write",
+			"--repo",
+			repository,
+			"--conversation",
+			"conversation-1",
+			"--agent",
+			"agent-1",
+			"--artifact",
+			"prd",
+			"--content-file",
+			"/proc/1/mem",
+		], { WORKBENCH_HOME: join(root, "data") })
+
+		expect(result.exitCode).toBe(1)
+		expect(result.stderr).toContain("/proc/1/mem")
+		expect(result.stderr).not.toContain("WORKBENCH_HOME")
+	})
+
+	test("uses the HOME data root when dedicated and XDG roots are absent", async () => {
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
+		temporaryDirectories.push(root)
+		const repository = await createRepository(root, "repository")
+
+		const started = await run([
+			"start",
+			"--repo",
+			repository,
+			"--conversation",
+			"conversation-1",
+			"--name",
+			"HOME storage",
+		], { HOME: join(root, "home") })
+
+		expect(started.stderr).toBe("")
+		expect(started.exitCode).toBe(0)
+		expect(JSON.parse(started.stdout).directory.startsWith(
+			join(root, "home", ".local", "share", "workbench"),
+		)).toBe(true)
+	})
+})
 
 async function git(repository: string, ...args: string[]) {
 	const process = Bun.spawn(["git", "-C", repository, ...args], {
@@ -74,7 +173,7 @@ afterEach(async () => {
 
 describe("work item focus", () => {
 	test("rejects blank identities before persisting work", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -94,7 +193,7 @@ describe("work item focus", () => {
 	})
 
 	test("reports no candidates before the first work item exists", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 
@@ -112,7 +211,7 @@ describe("work item focus", () => {
 	})
 
 	test("starts work outside the repository and reads it from another clone", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const firstClone = await createRepository(root, "first-clone")
 		const secondClone = await createRepository(root, "second-clone", "https://github.com/juicerq/example.git")
@@ -169,7 +268,7 @@ describe("work item focus", () => {
 	})
 
 	test("uses the Codex thread as the conversation identifier", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = {
@@ -198,7 +297,7 @@ describe("work item focus", () => {
 	})
 
 	test("keeps independent conversation focus and gives it precedence over a name", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const dataDirectory = join(root, "data")
@@ -228,7 +327,7 @@ describe("work item focus", () => {
 		const firstWork = JSON.parse(first.stdout)
 		const secondWork = JSON.parse(second.stdout)
 		const focusFiles = await Array.fromAsync(
-			new Bun.Glob("grill-workbench/repositories/*/focus/*.json").scan({
+			new Bun.Glob("workbench/repositories/*/focus/*.json").scan({
 				absolute: true,
 				cwd: dataDirectory,
 			}),
@@ -264,7 +363,7 @@ describe("work item focus", () => {
 	})
 
 	test("focuses the only active work item for a new conversation", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -311,7 +410,7 @@ describe("work item focus", () => {
 	})
 
 	test("focuses an unambiguous name and reports ambiguous candidates without changing focus", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -369,7 +468,7 @@ describe("work item focus", () => {
 
 describe("specification lifecycle", () => {
 	test("reads specification and task Markdown from files", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -443,7 +542,7 @@ describe("specification lifecycle", () => {
 	})
 
 	test("applies legal phase transitions atomically and preserves disk after an illegal transition", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -510,7 +609,7 @@ describe("specification lifecycle", () => {
 	})
 
 	test("requires specification ownership and records an explicit takeover", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -629,7 +728,7 @@ describe("specification lifecycle", () => {
 	})
 
 	test("reports terminal work while freezing its lifecycle and artifacts", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -698,7 +797,7 @@ describe("specification lifecycle", () => {
 
 describe("task coordination", () => {
 	test("records claim Git context and warns when status runs from another worktree", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const worktree = join(root, "feature-worktree")
@@ -859,7 +958,7 @@ describe("task coordination", () => {
 	})
 
 	test("rejects completion by a non-owner and with unchecked acceptance criteria", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -1022,7 +1121,7 @@ describe("task coordination", () => {
 	})
 
 	test("replaces the owner checkpoint and completes with evidence without closing work", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -1158,7 +1257,7 @@ describe("task coordination", () => {
 	})
 
 	test("drops with a reason and closes work only through an explicit terminal outcome", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -1288,7 +1387,7 @@ describe("task coordination", () => {
 	})
 
 	test("gives exactly one of two competing CLI processes the task claim", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -1361,7 +1460,7 @@ describe("task coordination", () => {
 	})
 
 	test("derives task availability and records explicit takeover without persisting derived states", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -1588,7 +1687,7 @@ describe("task coordination", () => {
 
 describe("temporary work retention", () => {
 	test("derives stale active work from artifact activity without persisting or deleting it", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
@@ -1761,7 +1860,7 @@ describe("temporary work retention", () => {
 	})
 
 	test("removes every expired terminal outcome on normal CLI use and preserves active work", async () => {
-		const root = await mkdtemp(join(tmpdir(), "grill-workbench-"))
+		const root = await mkdtemp(join(tmpdir(), "workbench-"))
 		temporaryDirectories.push(root)
 		const repository = await createRepository(root, "repository")
 		const environment = { XDG_DATA_HOME: join(root, "data") }
