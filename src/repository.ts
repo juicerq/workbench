@@ -1,5 +1,3 @@
-import { WorkSchemas } from "./schemas"
-
 function normalizeRemote(remote: string) {
 	if (remote.includes("://")) {
 		const url = new URL(remote)
@@ -40,18 +38,6 @@ async function gitOutput(repositoryPath: string, ...args: string[]) {
 	return stdout.trim()
 }
 
-export async function observeGitContext(repositoryPath: string) {
-	const [remote, worktree, branch, commit] = await Promise.all([
-		gitOutput(repositoryPath, "remote", "get-url", "origin"),
-		gitOutput(repositoryPath, "rev-parse", "--show-toplevel"),
-		gitOutput(repositoryPath, "branch", "--show-current"),
-		gitOutput(repositoryPath, "rev-parse", "--verify", "HEAD").catch(() => null),
-	])
-
-	return WorkSchemas.gitContext.assert({
-		branch: branch || null,
-		commit,
-		repository: normalizeRemote(remote),
-		worktree,
-	})
+export async function repositoryIdentity(repositoryPath: string) {
+	return normalizeRemote(await gitOutput(repositoryPath, "remote", "get-url", "origin"))
 }
