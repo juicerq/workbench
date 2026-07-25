@@ -77,6 +77,39 @@ async function createWork(input: Awaited<ReturnType<typeof fixture>>, name = "Im
 	], { WORKBENCH_HOME: input.workbenchHome })
 }
 
+async function contentFile(input: Awaited<ReturnType<typeof fixture>>, name: string, content: string) {
+	const path = join(input.root, name)
+	await Bun.write(path, content)
+
+	return path
+}
+
+async function createTicket(
+	input: Awaited<ReturnType<typeof fixture>>,
+	work: string,
+	title: string,
+	type: string,
+	body?: string,
+	blockedBy?: string[],
+) {
+	return await run([
+		"ticket", "create", "--repo", input.repository, "--work", work,
+		"--title", title, "--type", type,
+		...body ? ["--content-file", body] : [],
+		...blockedBy ? ["--blocked-by", blockedBy.join(",")] : [],
+	], { WORKBENCH_HOME: input.workbenchHome })
+}
+
+async function frontier(input: Awaited<ReturnType<typeof fixture>>, work: string) {
+	const result = await run(["frontier", "--repo", input.repository, "--work", work], {
+		WORKBENCH_HOME: input.workbenchHome,
+	})
+
+	expect(result.exitCode).toBe(0)
+
+	return JSON.parse(result.stdout).tickets
+}
+
 afterEach(async () => {
 	await Promise.all(temporaryDirectories.splice(0).map(async (directory) =>
 		await rm(directory, { force: true, recursive: true }),
@@ -184,14 +217,16 @@ describe("work artifacts", () => {
 		expect(JSON.parse(listed.stdout).works).toEqual([])
 	})
 
-	test("lists only directories that contain spec.md", async () => {
+	test("lists every work directory with the artifacts it holds", async () => {
 		const input = await fixture()
 		const first = JSON.parse((await createWork(input, "Zulu")).stdout)
 		const second = JSON.parse((await createWork(input, "Alpha")).stdout)
 		const workParent = join(first.directory, "..")
-		await mkdir(join(workParent, "legacy", "tasks"), { recursive: true })
-		await Bun.write(join(workParent, "legacy", "work.json"), "{}")
 		await mkdir(join(workParent, ".unfinished"))
+		await run([
+			"write", "--repo", input.repository, "--work", "alpha",
+			"--artifact", "issues", "--content-file", input.specPath,
+		], { WORKBENCH_HOME: input.workbenchHome })
 
 		const listed = await run(["list", "--repo", input.repository], {
 			WORKBENCH_HOME: input.workbenchHome,
@@ -199,10 +234,37 @@ describe("work artifacts", () => {
 
 		expect(listed.exitCode).toBe(0)
 		expect(JSON.parse(listed.stdout).works).toEqual([
-			{ directory: second.directory, id: "alpha" },
-			{ directory: first.directory, id: "zulu" },
+			{ artifacts: ["issues", "spec"], directory: second.directory, id: "alpha" },
+			{ artifacts: ["spec"], directory: first.directory, id: "zulu" },
 		])
-		expect(await Bun.file(join(workParent, "legacy", "work.json")).exists()).toBe(true)
+	})
+
+	test("creates and lists a work that has no specification", async () => {
+		const input = await fixture()
+		const created = await run([
+			"create", "--repo", input.repository, "--name", "Chart first",
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const work = JSON.parse(created.stdout)
+		const listed = await run(["list", "--repo", input.repository], {
+			WORKBENCH_HOME: input.workbenchHome,
+		})
+		const read = await run([
+			"read", "--repo", input.repository, "--work", work.id,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const written = await run([
+			"write", "--repo", input.repository, "--work", work.id,
+			"--artifact", "spec", "--content-file", input.specPath,
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(created.exitCode).toBe(0)
+		expect(JSON.parse(listed.stdout).works).toEqual([
+			{ artifacts: [], directory: work.directory, id: "chart-first" },
+		])
+		expect(JSON.parse(read.stdout).artifacts).toEqual({})
+		expect(written.exitCode).toBe(0)
+		expect(await Bun.file(join(work.directory, "spec.md")).text()).toBe(
+			"# Specification\n\nBuild the direct path.\n",
+		)
 	})
 
 	test("never scans or removes legacy work outside the v2 namespace", async () => {
@@ -226,7 +288,9 @@ describe("work artifacts", () => {
 			"remove", "--repo", input.repository, "--work", work.id,
 		], { WORKBENCH_HOME: input.workbenchHome })
 
-		expect(JSON.parse(listed.stdout).works).toEqual([{ directory: work.directory, id: work.id }])
+		expect(JSON.parse(listed.stdout).works).toEqual([
+			{ artifacts: ["spec"], directory: work.directory, id: work.id },
+		])
 		expect(removed.exitCode).toBe(0)
 		expect(await Bun.file(join(legacyDirectory, "spec.md")).text()).toBe("legacy")
 	})
@@ -286,7 +350,7 @@ describe("work artifacts", () => {
 		expect(await Bun.file(join(work.directory, "issues.md")).text()).toBe(original)
 	})
 
-	test("requires spec.md before reading, writing, or removing work", async () => {
+	test("requires the work directory before reading, writing, or removing work", async () => {
 		const input = await fixture()
 		const contentPath = join(input.root, "content.md")
 		await Bun.write(contentPath, "content")
@@ -359,17 +423,333 @@ describe("work artifacts", () => {
 	})
 })
 
+describe("maps", () => {
+	test("keeps the map's state across body writes and removes it with its work", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const first = await contentFile(input, "map-source.md", "# Map\n\nHeading somewhere.\n")
+		const second = await contentFile(input, "map-update.md", "# Map\n\nHalfway there.\n")
+		const written = await run([
+			"map", "write", "--repo", input.repository, "--work", work.id, "--content-file", first,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const closed = await run([
+			"map", "state", "--repo", input.repository, "--work", work.id, "--state", "closed",
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const rewritten = await run([
+			"map", "write", "--repo", input.repository, "--work", work.id, "--content-file", second,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const read = await run([
+			"read", "--repo", input.repository, "--work", work.id,
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(JSON.parse(written.stdout)).toEqual({ id: work.id, state: "open" })
+		expect(JSON.parse(closed.stdout)).toEqual({ id: work.id, state: "closed" })
+		expect(JSON.parse(rewritten.stdout)).toEqual({ id: work.id, state: "closed" })
+		expect(JSON.parse(read.stdout).artifacts.map).toBe(
+			"---\nstate: closed\n---\n\n# Map\n\nHalfway there.\n",
+		)
+
+		await run(["remove", "--repo", input.repository, "--work", work.id], {
+			WORKBENCH_HOME: input.workbenchHome,
+		})
+		expect(await Bun.file(join(work.directory, "map.md")).exists()).toBe(false)
+	})
+
+	test("rejects an unknown map state and removing a map on its own", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const source = await contentFile(input, "map-source.md", "# Map\n")
+		await run([
+			"map", "write", "--repo", input.repository, "--work", work.id, "--content-file", source,
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		for (const command of [
+			["map", "state", "--repo", input.repository, "--work", work.id, "--state", "paused"],
+			["remove", "--repo", input.repository, "--work", work.id, "--artifact", "map"],
+		]) {
+			const result = await run(command, { WORKBENCH_HOME: input.workbenchHome })
+			expect(result.exitCode).toBe(1)
+			expect(result.stdout).toBe("")
+		}
+
+		expect(await Bun.file(join(work.directory, "map.md")).text()).toBe("---\nstate: open\n---\n\n# Map\n")
+	})
+})
+
+describe("tickets", () => {
+	test("derives a slug from the title and carries the CLI-owned fields", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const question = await contentFile(input, "question.md", "Where does capture happen?")
+		const created = await createTicket(input, work.id, "Onde está a captura?", "research", question)
+		const read = await run([
+			"ticket", "read", "--repo", input.repository, "--work", work.id,
+			"--ticket", "onde-esta-a-captura",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(JSON.parse(created.stdout)).toEqual({
+			blockedBy: [],
+			id: work.id,
+			slug: "onde-esta-a-captura",
+		})
+		expect(JSON.parse(read.stdout)).toEqual({
+			blockedBy: [],
+			blocks: [],
+			body: "Where does capture happen?",
+			id: work.id,
+			slug: "onde-esta-a-captura",
+			state: "open",
+			title: "Onde está a captura?",
+			type: "research",
+		})
+		expect((await stat(join(work.directory, "tickets", "onde-esta-a-captura.md"))).mode & 0o777)
+			.toBe(0o600)
+	})
+
+	test("claims a ticket and overwrites an existing assignee", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		await createTicket(input, work.id, "Pick the shape", "grilling")
+		const first = await run([
+			"ticket", "claim", "--repo", input.repository, "--work", work.id,
+			"--ticket", "pick-the-shape", "--assignee", "wayfinder-a",
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const second = await run([
+			"ticket", "claim", "--repo", input.repository, "--work", work.id,
+			"--ticket", "pick-the-shape", "--assignee", "wayfinder-b",
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const read = await run([
+			"ticket", "read", "--repo", input.repository, "--work", work.id,
+			"--ticket", "pick-the-shape",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(first.exitCode).toBe(0)
+		expect(second.exitCode).toBe(0)
+		expect(JSON.parse(read.stdout).assignee).toBe("wayfinder-b")
+	})
+
+	test("closes a ticket with its resolution and refuses to close without one", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const question = await contentFile(input, "question.md", "Which format wins?")
+		const resolution = await contentFile(input, "resolution.md", "The compact one.")
+		const blank = await contentFile(input, "blank.md", " \n\t")
+		await createTicket(input, work.id, "Which format", "grilling", question)
+		const rejected = await run([
+			"ticket", "close", "--repo", input.repository, "--work", work.id,
+			"--ticket", "which-format", "--content-file", blank,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const missing = await run([
+			"ticket", "close", "--repo", input.repository, "--work", work.id, "--ticket", "which-format",
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const closed = await run([
+			"ticket", "close", "--repo", input.repository, "--work", work.id,
+			"--ticket", "which-format", "--content-file", resolution,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const read = await run([
+			"ticket", "read", "--repo", input.repository, "--work", work.id, "--ticket", "which-format",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(rejected.exitCode).toBe(1)
+		expect(missing.exitCode).toBe(1)
+		expect(JSON.parse(closed.stdout)).toEqual({
+			id: work.id,
+			slug: "which-format",
+			state: "closed",
+		})
+		expect(JSON.parse(read.stdout)).toMatchObject({
+			body: "Which format wins?\n\n## Resolution\n\nThe compact one.",
+			state: "closed",
+		})
+	})
+
+	test("stores blockers on the blocked ticket only and derives the reverse edge", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		await createTicket(input, work.id, "Explore the source", "research")
+		await createTicket(input, work.id, "Decide the shape", "grilling", undefined, [
+			"explore-the-source",
+		])
+		await createTicket(input, work.id, "Prototype the write", "prototype")
+		const wired = await run([
+			"ticket", "block", "--repo", input.repository, "--work", work.id,
+			"--ticket", "prototype-the-write", "--blocked-by", "explore-the-source,decide-the-shape",
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const blocker = await run([
+			"ticket", "read", "--repo", input.repository, "--work", work.id,
+			"--ticket", "explore-the-source",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(JSON.parse(wired.stdout).blockedBy).toEqual(["explore-the-source", "decide-the-shape"])
+		expect(JSON.parse(blocker.stdout)).toMatchObject({
+			blockedBy: [],
+			blocks: ["decide-the-shape", "prototype-the-write"],
+		})
+		expect(await Bun.file(join(work.directory, "tickets", "explore-the-source.md")).text())
+			.not.toContain("blocks")
+	})
+
+	test("rejects an unknown blocker, a self blocker, and an invented type", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		await createTicket(input, work.id, "Only ticket", "task")
+
+		for (const command of [
+			[
+				"ticket", "create", "--repo", input.repository, "--work", work.id,
+				"--title", "Second", "--type", "task", "--blocked-by", "nowhere",
+			],
+			[
+				"ticket", "block", "--repo", input.repository, "--work", work.id,
+				"--ticket", "only-ticket", "--blocked-by", "only-ticket",
+			],
+			[
+				"ticket", "create", "--repo", input.repository, "--work", work.id,
+				"--title", "Third", "--type", "invented",
+			],
+		]) {
+			const result = await run(command, { WORKBENCH_HOME: input.workbenchHome })
+			expect(result.exitCode).toBe(1)
+			expect(result.stdout).toBe("")
+		}
+
+		expect((await Array.fromAsync(new Bun.Glob("*.md").scan({
+			cwd: join(work.directory, "tickets"),
+		}))).sort()).toEqual(["only-ticket.md"])
+	})
+
+	test("removes one ticket and keeps the work and its siblings", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		await createTicket(input, work.id, "Removed ticket", "task")
+		await createTicket(input, work.id, "Retained ticket", "task")
+		const removed = await run([
+			"ticket", "remove", "--repo", input.repository, "--work", work.id,
+			"--ticket", "removed-ticket",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(JSON.parse(removed.stdout)).toEqual({
+			id: work.id,
+			removed: true,
+			slug: "removed-ticket",
+		})
+		expect(await Bun.file(join(work.directory, "tickets", "retained-ticket.md")).exists()).toBe(true)
+		expect(await Bun.file(join(work.directory, "spec.md")).exists()).toBe(true)
+	})
+
+	test("refuses to remove a ticket another ticket still declares as a blocker", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		await createTicket(input, work.id, "Blocker ticket", "research")
+		await createTicket(input, work.id, "Blocked ticket", "task", undefined, ["blocker-ticket"])
+		const removed = await run([
+			"ticket", "remove", "--repo", input.repository, "--work", work.id,
+			"--ticket", "blocker-ticket",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(removed.exitCode).toBe(1)
+		expect(removed.stderr).toContain("blocked-ticket")
+		expect(await Bun.file(join(work.directory, "tickets", "blocker-ticket.md")).exists()).toBe(true)
+	})
+
+	test("keeps ticket bodies out of the work read", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const question = await contentFile(input, "question.md", "Body that must stay hidden")
+		await createTicket(input, work.id, "Hidden body", "task", question)
+		const read = await run([
+			"read", "--repo", input.repository, "--work", work.id,
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(read.stdout).not.toContain("Body that must stay hidden")
+	})
+})
+
+describe("frontier", () => {
+	test("moves a ticket on when its blocker closes and off when it is claimed", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const resolution = await contentFile(input, "resolution.md", "Found it.")
+		await createTicket(input, work.id, "Explore the source", "research")
+		await createTicket(input, work.id, "Decide the shape", "grilling", undefined, [
+			"explore-the-source",
+		])
+		const blocked = await frontier(input, work.id)
+		await run([
+			"ticket", "close", "--repo", input.repository, "--work", work.id,
+			"--ticket", "explore-the-source", "--content-file", resolution,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const unblocked = await frontier(input, work.id)
+		await run([
+			"ticket", "claim", "--repo", input.repository, "--work", work.id,
+			"--ticket", "decide-the-shape", "--assignee", "wayfinder",
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const claimed = await frontier(input, work.id)
+
+		expect(blocked).toEqual([
+			{ slug: "explore-the-source", title: "Explore the source", type: "research" },
+		])
+		expect(unblocked).toEqual([
+			{ slug: "decide-the-shape", title: "Decide the shape", type: "grilling" },
+		])
+		expect(claimed).toEqual([])
+	})
+
+	test("returns an empty frontier for a work without tickets", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+
+		expect(await frontier(input, work.id)).toEqual([])
+	})
+})
+
+describe("assets", () => {
+	test("stores an asset under a derived name and reads it back", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const source = await contentFile(input, "asset-source.md", "# Conversa\n\nThe raw notes.\n")
+		const written = await run([
+			"asset", "write", "--repo", input.repository, "--work", work.id,
+			"--name", "Conversa Lobo", "--content-file", source,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const read = await run([
+			"asset", "read", "--repo", input.repository, "--work", work.id, "--name", "Conversa Lobo",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(JSON.parse(written.stdout)).toEqual({
+			id: work.id,
+			name: "conversa-lobo",
+			path: "assets/conversa-lobo.md",
+		})
+		expect(JSON.parse(read.stdout).content).toBe("# Conversa\n\nThe raw notes.\n")
+		expect(await Bun.file(join(work.directory, "assets", "conversa-lobo.md")).exists()).toBe(true)
+	})
+
+	test("fails on an asset that was never written", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const read = await run([
+			"asset", "read", "--repo", input.repository, "--work", work.id, "--name", "Missing",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(read.exitCode).toBe(1)
+		expect(read.stdout).toBe("")
+	})
+})
+
 describe("CLI boundary", () => {
 	test("requires content files and rejects unknown or duplicate options", async () => {
 		const input = await fixture()
 
 		for (const command of [
-			["create", "--repo", input.repository, "--name", "Missing content"],
+			["write", "--repo", input.repository, "--work", "any-work", "--artifact", "issues"],
 			[
 				"create", "--repo", input.repository, "--repo", input.repository,
 				"--name", "Duplicate", "--content-file", input.specPath,
 			],
 			["start", "--repo", input.repository],
+			["ticket", "start", "--repo", input.repository],
+			["ticket"],
 		]) {
 			const result = await run(command, { WORKBENCH_HOME: input.workbenchHome })
 			expect(result.exitCode).toBe(1)

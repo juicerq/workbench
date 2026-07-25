@@ -3,7 +3,7 @@
 	"version": "0.1.0",
 	"type": "module",
 	"bin": {
-		"grill": "./src/cli.ts"
+		"workbench": "./src/cli.ts"
 	},
 	"scripts": {
 		"test": "bun test",

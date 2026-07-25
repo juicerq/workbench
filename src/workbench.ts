@@ -1,7 +1,13 @@
 import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { atomicWrite, ensurePrivateDirectory } from "./filesystem"
-import { repositoryIdentity } from "./repository"
+import {
+	atomicWrite,
+	directoryExists,
+	ensurePrivateDirectory,
+	ignoreMissingDirectory,
+} from "./filesystem"
+import { repositoryLocation, slug, workLocation, worksDirectory } from "./locations"
+import { mapFileName, readMap } from "./map"
 import type {
 	Artifact,
 	CreateWorkInput,
@@ -10,7 +16,6 @@ import type {
 	RemoveWorkInput,
 	WriteArtifactInput,
 } from "./schemas"
-import { storageRoot } from "./storage"
 
 const artifactPaths = {
 	issues: "issues.md",
@@ -18,146 +23,112 @@ const artifactPaths = {
 	spec: "spec.md",
 } satisfies Record<Artifact, string>
 
-function digest(value: string) {
-	return new Bun.CryptoHasher("sha256").update(value).digest("hex")
-}
+const artifacts = Object.keys(artifactPaths) as Artifact[]
 
-function workIdentifier(name: string) {
-	const identifier = name
-		.normalize("NFKD")
-		.replace(/[\u0300-\u036f]/g, "")
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-|-$/g, "")
+async function presentArtifacts(directory: string) {
+	const present = await Promise.all(artifacts.map(async (artifact) =>
+		await Bun.file(join(directory, artifactPaths[artifact])).exists() ? [artifact] : []
+	))
 
-	if (!identifier) {
-		throw new Error("--name must contain at least one letter or number")
-	}
-
-	return identifier
-}
-
-async function repositoryDirectory(repositoryPath: string) {
-	const repository = await repositoryIdentity(repositoryPath)
-
-	return {
-		directory: join(storageRoot(), "v2", "repositories", digest(repository)),
-		repository,
-	}
-}
-
-function workDirectory(repositoryDirectory: string, work: string) {
-	return join(repositoryDirectory, "work", work)
-}
-
-async function requireWork(directory: string, work: string) {
-	if (!await Bun.file(join(directory, artifactPaths.spec)).exists()) {
-		throw new Error(`Work ${work} does not exist`)
-	}
+	return present.flat()
 }
 
 async function readArtifacts(directory: string) {
-	const artifacts = { spec: await Bun.file(join(directory, artifactPaths.spec)).text() } as {
-		spec: string
-		issues?: string
-		learnings?: string
-	}
+	const documents = { ...artifactPaths, map: mapFileName }
+	const contents = await Promise.all(Object.entries(documents).map(async ([name, path]) => {
+		const file = Bun.file(join(directory, path))
 
-	for (const artifact of ["issues", "learnings"] as const) {
-		const path = join(directory, artifactPaths[artifact])
-		if (await Bun.file(path).exists()) {
-			artifacts[artifact] = await Bun.file(path).text()
-		}
-	}
+		return await file.exists() ? [[name, await file.text()] as const] : []
+	}))
 
-	return artifacts
+	return Object.fromEntries(contents.flat())
 }
 
 export const Workbench = {
 	async create(input: CreateWorkInput) {
-		const repositoryContext = await repositoryDirectory(input.repo)
-		const id = workIdentifier(input.name)
-		const parentDirectory = join(repositoryContext.directory, "work")
-		const directory = workDirectory(repositoryContext.directory, id)
+		const repository = await repositoryLocation(input.repo)
+		const id = slug(input.name)
+		const parentDirectory = worksDirectory(repository.directory)
+		const directory = join(parentDirectory, id)
 		const temporaryDirectory = join(parentDirectory, `.${id}.${crypto.randomUUID()}.tmp`)
 
 		await ensurePrivateDirectory(parentDirectory)
+
+		if (await directoryExists(directory)) {
+			throw new Error(`Work ${id} already exists`)
+		}
+
 		await mkdir(temporaryDirectory, { mode: 0o700 })
 
 		try {
-			await atomicWrite(join(temporaryDirectory, artifactPaths.spec), input.content)
+			if (input.content) {
+				await atomicWrite(join(temporaryDirectory, artifactPaths.spec), input.content)
+			}
+
 			await rename(temporaryDirectory, directory)
 		} catch (error) {
 			await rm(temporaryDirectory, { force: true, recursive: true })
 			throw error
 		}
 
-		return { directory, id, repository: repositoryContext.repository }
+		return { directory, id, repository: repository.repository }
 	},
 
 	async list(input: ListWorkInput) {
-		const repositoryContext = await repositoryDirectory(input.repo)
-		const parentDirectory = join(repositoryContext.directory, "work")
-		const entries = await readdir(parentDirectory, { withFileTypes: true }).catch((error) => {
-			if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-				return []
-			}
-
-			throw error
-		})
+		const repository = await repositoryLocation(input.repo)
+		const parentDirectory = worksDirectory(repository.directory)
+		const entries = await readdir(parentDirectory, { withFileTypes: true })
+			.catch(ignoreMissingDirectory)
 		const works = await Promise.all(entries
 			.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
 			.map(async (entry) => {
-				const directory = workDirectory(repositoryContext.directory, entry.name)
+				const directory = join(parentDirectory, entry.name)
+				const map = await readMap(directory)
 
-				return await Bun.file(join(directory, artifactPaths.spec)).exists()
-					? [{ directory, id: entry.name }]
-					: []
+				return {
+					artifacts: await presentArtifacts(directory),
+					directory,
+					id: entry.name,
+					...map && { map: map.state },
+				}
 			}))
 
 		return {
-			repository: repositoryContext.repository,
-			works: works.flat().sort((first, second) => first.id.localeCompare(second.id)),
+			repository: repository.repository,
+			works: works.sort((first, second) => first.id.localeCompare(second.id)),
 		}
 	},
 
 	async read(input: ReadWorkInput) {
-		const repositoryContext = await repositoryDirectory(input.repo)
-		const directory = workDirectory(repositoryContext.directory, input.work)
-
-		await requireWork(directory, input.work)
+		const work = await workLocation(input)
 
 		return {
-			artifacts: await readArtifacts(directory),
-			directory,
-			id: input.work,
-			repository: repositoryContext.repository,
+			artifacts: await readArtifacts(work.directory),
+			directory: work.directory,
+			id: work.id,
+			repository: work.repository,
 		}
 	},
 
 	async write(input: WriteArtifactInput) {
-		const repositoryContext = await repositoryDirectory(input.repo)
-		const directory = workDirectory(repositoryContext.directory, input.work)
+		const work = await workLocation(input)
 
-		await requireWork(directory, input.work)
-		await atomicWrite(join(directory, artifactPaths[input.artifact]), input.content)
+		await atomicWrite(join(work.directory, artifactPaths[input.artifact]), input.content)
 
-		return { artifact: input.artifact, id: input.work }
+		return { artifact: input.artifact, id: work.id }
 	},
 
 	async remove(input: RemoveWorkInput) {
-		const repositoryContext = await repositoryDirectory(input.repo)
-		const directory = workDirectory(repositoryContext.directory, input.work)
+		const work = await workLocation(input)
 
-		await requireWork(directory, input.work)
 		if (input.artifact) {
-			await rm(join(directory, artifactPaths[input.artifact]), { force: true })
+			await rm(join(work.directory, artifactPaths[input.artifact]), { force: true })
 
-			return { artifact: input.artifact, id: input.work, removed: true }
+			return { artifact: input.artifact, id: work.id, removed: true }
 		}
 
-		await rm(directory, { recursive: true })
+		await rm(work.directory, { recursive: true })
 
-		return { id: input.work, removed: true }
+		return { id: work.id, removed: true }
 	},
 }
