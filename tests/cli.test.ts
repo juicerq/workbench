@@ -563,6 +563,38 @@ describe("tickets", () => {
 		})
 	})
 
+	test("refuses to close a resolved ticket and rewrites its resolution with --replace", async () => {
+		const input = await fixture()
+		const work = JSON.parse((await createWork(input)).stdout)
+		const question = await contentFile(input, "question.md", "Which format wins?")
+		const resolution = await contentFile(input, "resolution.md", "The compact one.")
+		const correction = await contentFile(input, "correction.md", "The verbose one, actually.")
+		await createTicket(input, work.id, "Which format", "grilling", question)
+		await run([
+			"ticket", "close", "--repo", input.repository, "--work", work.id,
+			"--ticket", "which-format", "--content-file", resolution,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const reclosed = await run([
+			"ticket", "close", "--repo", input.repository, "--work", work.id,
+			"--ticket", "which-format", "--content-file", correction,
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const replaced = await run([
+			"ticket", "close", "--repo", input.repository, "--work", work.id,
+			"--ticket", "which-format", "--content-file", correction, "--replace",
+		], { WORKBENCH_HOME: input.workbenchHome })
+		const read = await run([
+			"ticket", "read", "--repo", input.repository, "--work", work.id, "--ticket", "which-format",
+		], { WORKBENCH_HOME: input.workbenchHome })
+
+		expect(reclosed.exitCode).toBe(1)
+		expect(reclosed.stderr).toContain("already closed")
+		expect(replaced.exitCode).toBe(0)
+		expect(JSON.parse(read.stdout)).toMatchObject({
+			body: "Which format wins?\n\n## Resolution\n\nThe verbose one, actually.",
+			state: "closed",
+		})
+	})
+
 	test("stores blockers on the blocked ticket only and derives the reverse edge", async () => {
 		const input = await fixture()
 		const work = JSON.parse((await createWork(input)).stdout)

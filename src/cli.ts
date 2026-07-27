@@ -9,6 +9,7 @@ import { Workbench } from "./workbench"
 
 interface Route {
 	content?: "optional" | "required"
+	flags?: string[]
 	run: (options: unknown) => Promise<unknown>
 }
 
@@ -52,6 +53,7 @@ const routes: Record<string, Route> = {
 	},
 	"ticket close": {
 		content: "required",
+		flags: ["replace"],
 		run: async (options) => await Tickets.close(CliSchemas.ticketClose.assert(options)),
 	},
 	"ticket read": {
@@ -73,14 +75,14 @@ const groupedCommands = new Set(
 	Object.keys(routes).filter((name) => name.includes(" ")).map((name) => name.split(" ")[0]),
 )
 
-function parseOptions(args: string[]) {
-	const options: Record<string, string> = {}
+function parseOptions(args: string[], flags: string[] = []) {
+	const options: Record<string, string | true> = {}
+	let index = 0
 
-	for (let index = 0; index < args.length; index += 2) {
+	while (index < args.length) {
 		const key = args[index]
-		const value = args[index + 1]
 
-		if (!key?.startsWith("--") || value === undefined) {
+		if (!key?.startsWith("--")) {
 			throw new Error(`Invalid argument ${key ?? ""}`.trim())
 		}
 
@@ -89,7 +91,19 @@ function parseOptions(args: string[]) {
 			throw new Error(`Duplicate option ${key}`)
 		}
 
+		if (flags.includes(name)) {
+			options[name] = true
+			index += 1
+			continue
+		}
+
+		const value = args[index + 1]
+		if (value === undefined) {
+			throw new Error(`Invalid argument ${key}`)
+		}
+
 		options[name] = value
+		index += 2
 	}
 
 	return options
@@ -104,14 +118,17 @@ function errorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error)
 }
 
-async function withContent(options: Record<string, string>, requirement: Route["content"]) {
+async function withContent(
+	options: Record<string, string | true>,
+	requirement: Route["content"],
+) {
 	if (!requirement) {
 		return options
 	}
 
 	const { ["content-file"]: contentFile, ...input } = options
 
-	if (!contentFile) {
+	if (typeof contentFile !== "string" || !contentFile) {
 		if (requirement === "required") {
 			throw new Error("--content-file is required")
 		}
@@ -132,7 +149,9 @@ async function main() {
 		throw new Error(`Unknown command ${name}`.trim())
 	}
 
-	return await route.run(await withContent(parseOptions(args.slice(depth)), route.content))
+	return await route.run(
+		await withContent(parseOptions(args.slice(depth), route.flags), route.content),
+	)
 }
 
 await main()

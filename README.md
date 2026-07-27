@@ -52,13 +52,13 @@ A work holds at most one map. The CLI owns its frontmatter and a body write repl
 workbench ticket create --repo "$PWD" --work <work-id> --title <title> --type <research|prototype|grilling|task> [--content-file <path>] [--blocked-by <slug>,<slug>]
 workbench ticket block --repo "$PWD" --work <work-id> --ticket <slug> --blocked-by <slug>,<slug>
 workbench ticket claim --repo "$PWD" --work <work-id> --ticket <slug> --assignee <dev>
-workbench ticket close --repo "$PWD" --work <work-id> --ticket <slug> --content-file <resolution-path>
+workbench ticket close --repo "$PWD" --work <work-id> --ticket <slug> --content-file <resolution-path> [--replace]
 workbench ticket read --repo "$PWD" --work <work-id> --ticket <slug>
 workbench ticket remove --repo "$PWD" --work <work-id> --ticket <slug>
 workbench frontier --repo "$PWD" --work <work-id>
 ```
 
-A ticket's slug comes from its title, using the same derivation as the work ID. Blocking is recorded only on the blocked ticket; `ticket read` derives the reverse direction. `ticket claim` overwrites any existing assignee and never fails. `ticket close` writes the resolution into the body and closes the ticket in one call, and refuses to close without one. `frontier` returns the open, unclaimed tickets whose blockers are all closed, as slug, title, and type.
+A ticket's slug comes from its title, using the same derivation as the work ID. Blocking is recorded only on the blocked ticket; `ticket read` derives the reverse direction. `ticket claim` overwrites any existing assignee and never fails. `ticket close` writes the resolution into the body and closes the ticket in one call, and refuses to close without one. Closing an already closed ticket fails; `--replace` rewrites its resolution in place. `frontier` returns the open, unclaimed tickets whose blockers are all closed, as slug, title, and type.
 
 ### Assets
 

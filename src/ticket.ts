@@ -15,6 +15,8 @@ import {
 	type TicketRemoveInput,
 } from "./schemas"
 
+const resolutionHeading = "## Resolution"
+
 interface StoredTicket extends Ticket {
 	body: string
 	slug: string
@@ -55,6 +57,14 @@ async function writeTicket(workDirectory: string, ticket: StoredTicket) {
 			blocked_by: ticket.blockedBy,
 		}, ticket.body),
 	)
+}
+
+function withResolution(body: string, content: string) {
+	const lines = body.split("\n")
+	const heading = lines.indexOf(resolutionHeading)
+	const question = (heading === -1 ? lines : lines.slice(0, heading)).join("\n").trim()
+
+	return `${question}\n\n${resolutionHeading}\n\n${content.trim()}`.trim()
 }
 
 async function requireBlockers(workDirectory: string, ticket: string, blockers: string[]) {
@@ -114,9 +124,15 @@ export const Tickets = {
 		const work = await workLocation(input)
 		const ticket = await readTicket(work.directory, input.ticket)
 
+		if (ticket.state === "closed" && !input.replace) {
+			throw new Error(
+				`Ticket ${input.ticket} is already closed; pass --replace to rewrite its resolution`,
+			)
+		}
+
 		await writeTicket(work.directory, {
 			...ticket,
-			body: `${ticket.body}\n\n## Resolution\n\n${input.content.trim()}`.trim(),
+			body: withResolution(ticket.body, input.content),
 			state: "closed",
 		})
 

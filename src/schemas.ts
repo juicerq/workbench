@@ -73,6 +73,7 @@ export const CliSchemas = {
 	ticketClose: type({
 		"+": "reject",
 		content: nonBlankContent,
+		"replace?": "true",
 		ticket: identifier,
 		...workReference,
 	}),
