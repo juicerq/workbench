@@ -33,15 +33,16 @@ async function presentArtifacts(directory: string) {
 	return present.flat()
 }
 
-async function readArtifacts(directory: string) {
+async function locateArtifacts(directory: string) {
 	const documents = { ...artifactPaths, map: mapFileName }
-	const contents = await Promise.all(Object.entries(documents).map(async ([name, path]) => {
-		const file = Bun.file(join(directory, path))
+	const located = await Promise.all(Object.entries(documents).map(async ([name, fileName]) => {
+		const path = join(directory, fileName)
+		const file = Bun.file(path)
 
-		return await file.exists() ? [[name, await file.text()] as const] : []
+		return await file.exists() ? [[name, { bytes: file.size, path }] as const] : []
 	}))
 
-	return Object.fromEntries(contents.flat())
+	return Object.fromEntries(located.flat())
 }
 
 export const Workbench = {
@@ -103,7 +104,7 @@ export const Workbench = {
 		const work = await workLocation(input)
 
 		return {
-			artifacts: await readArtifacts(work.directory),
+			artifacts: await locateArtifacts(work.directory),
 			directory: work.directory,
 			id: work.id,
 			repository: work.repository,

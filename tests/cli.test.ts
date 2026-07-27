@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+const specification = "# Specification\n\nBuild the direct path.\n"
 const projectRoot = join(import.meta.dir, "..")
 const cliPath = join(projectRoot, "src", "cli.ts")
 const temporaryDirectories: string[] = []
@@ -60,7 +61,7 @@ async function fixture() {
 	const repository = await createRepository(root, "repository")
 	const workbenchHome = join(root, "data")
 	const specPath = join(root, "spec-source.md")
-	await Bun.write(specPath, "# Specification\n\nBuild the direct path.\n")
+	await Bun.write(specPath, specification)
 
 	return { repository, root, specPath, workbenchHome }
 }
@@ -132,7 +133,7 @@ describe("storage", () => {
 		expect((await stat(work.directory)).mode & 0o777).toBe(0o700)
 		expect((await stat(join(work.directory, "spec.md"))).mode & 0o777).toBe(0o600)
 		expect(await Bun.file(join(work.directory, "spec.md")).text()).toBe(
-			"# Specification\n\nBuild the direct path.\n",
+			specification,
 		)
 		expect((await Array.fromAsync(new Bun.Glob("*").scan({ cwd: work.directory }))).sort()).toEqual([
 			"spec.md",
@@ -185,7 +186,9 @@ describe("work artifacts", () => {
 		expect(read.stderr).toBe("")
 		expect(read.exitCode).toBe(0)
 		expect(JSON.parse(read.stdout)).toEqual({
-			artifacts: { spec: "# Specification\n\nBuild the direct path.\n" },
+			artifacts: {
+				spec: { bytes: Buffer.byteLength(specification), path: join(work.directory, "spec.md") },
+			},
 			directory: work.directory,
 			id: "improve-cafe",
 			repository: "github.com/juicerq/example",
@@ -201,7 +204,7 @@ describe("work artifacts", () => {
 		expect(first.exitCode).toBe(0)
 		expect(duplicate.exitCode).toBe(1)
 		expect(await Bun.file(join(JSON.parse(first.stdout).directory, "spec.md")).text()).toBe(
-			"# Specification\n\nBuild the direct path.\n",
+			specification,
 		)
 	})
 
@@ -263,7 +266,7 @@ describe("work artifacts", () => {
 		expect(JSON.parse(read.stdout).artifacts).toEqual({})
 		expect(written.exitCode).toBe(0)
 		expect(await Bun.file(join(work.directory, "spec.md")).text()).toBe(
-			"# Specification\n\nBuild the direct path.\n",
+			specification,
 		)
 	})
 
@@ -295,13 +298,15 @@ describe("work artifacts", () => {
 		expect(await Bun.file(join(legacyDirectory, "spec.md")).text()).toBe("legacy")
 	})
 
-	test("writes and reads only the three approved artifacts", async () => {
+	test("writes and locates only the three approved artifacts", async () => {
 		const input = await fixture()
 		const work = JSON.parse((await createWork(input)).stdout)
+		const issues = "# Issues\n\n- Implement the slice.\n"
+		const learnings = "# Learnings\n\nThe API returns UTC.\n"
 		const issuesPath = join(input.root, "issues-source.md")
 		const learningsPath = join(input.root, "learnings-source.md")
-		await Bun.write(issuesPath, "# Issues\n\n- Implement the slice.\n")
-		await Bun.write(learningsPath, "# Learnings\n\nThe API returns UTC.\n")
+		await Bun.write(issuesPath, issues)
+		await Bun.write(learningsPath, learnings)
 
 		for (const [artifact, path] of [["issues", issuesPath], ["learnings", learningsPath]]) {
 			const written = await run([
@@ -316,10 +321,14 @@ describe("work artifacts", () => {
 			"read", "--repo", input.repository, "--work", work.id,
 		], { WORKBENCH_HOME: input.workbenchHome })
 		expect(JSON.parse(read.stdout).artifacts).toEqual({
-			issues: "# Issues\n\n- Implement the slice.\n",
-			learnings: "# Learnings\n\nThe API returns UTC.\n",
-			spec: "# Specification\n\nBuild the direct path.\n",
+			issues: { bytes: Buffer.byteLength(issues), path: join(work.directory, "issues.md") },
+			learnings: {
+				bytes: Buffer.byteLength(learnings),
+				path: join(work.directory, "learnings.md"),
+			},
+			spec: { bytes: Buffer.byteLength(specification), path: join(work.directory, "spec.md") },
 		})
+		expect(read.stdout).not.toContain("Implement the slice")
 
 		const rejected = await run([
 			"write", "--repo", input.repository, "--work", work.id,
@@ -405,7 +414,7 @@ describe("work artifacts", () => {
 			removed: true,
 		})
 		expect(JSON.parse(read.stdout).artifacts).toEqual({
-			spec: "# Specification\n\nBuild the direct path.\n",
+			spec: { bytes: Buffer.byteLength(specification), path: join(work.directory, "spec.md") },
 		})
 	})
 
@@ -418,7 +427,7 @@ describe("work artifacts", () => {
 
 		expect(removed.exitCode).toBe(1)
 		expect(await Bun.file(join(work.directory, "spec.md")).text()).toBe(
-			"# Specification\n\nBuild the direct path.\n",
+			specification,
 		)
 	})
 })
@@ -445,9 +454,12 @@ describe("maps", () => {
 		expect(JSON.parse(written.stdout)).toEqual({ id: work.id, state: "open" })
 		expect(JSON.parse(closed.stdout)).toEqual({ id: work.id, state: "closed" })
 		expect(JSON.parse(rewritten.stdout)).toEqual({ id: work.id, state: "closed" })
-		expect(JSON.parse(read.stdout).artifacts.map).toBe(
-			"---\nstate: closed\n---\n\n# Map\n\nHalfway there.\n",
-		)
+		const document = "---\nstate: closed\n---\n\n# Map\n\nHalfway there.\n"
+		expect(JSON.parse(read.stdout).artifacts.map).toEqual({
+			bytes: Buffer.byteLength(document),
+			path: join(work.directory, "map.md"),
+		})
+		expect(await Bun.file(join(work.directory, "map.md")).text()).toBe(document)
 
 		await run(["remove", "--repo", input.repository, "--work", work.id], {
 			WORKBENCH_HOME: input.workbenchHome,

@@ -35,7 +35,7 @@ workbench write --repo "$PWD" --work <work-id> --artifact <spec|issues|learnings
 workbench remove --repo "$PWD" --work <work-id> [--artifact <issues|learnings>]
 ```
 
-`create` derives the work ID from `--name`. `list` reports each work's artifacts and its map's state. `read` returns `map.md`, `spec.md`, `issues.md`, and `learnings.md` when present, and never a ticket body. `write` accepts only non-blank content and preserves it exactly. `remove --artifact` removes only `issues.md` or `learnings.md`; omit `--artifact` to remove the whole work.
+`create` derives the work ID from `--name`. `list` reports each work's artifacts and its map's state. `read` locates a work: for each of `map.md`, `spec.md`, `issues.md`, and `learnings.md` that is present it returns the file's size in bytes and its absolute path, never the content and never a ticket. Open the path to read a body, and read only the part you need. `write` accepts only non-blank content and preserves it exactly. `remove --artifact` removes only `issues.md` or `learnings.md`; omit `--artifact` to remove the whole work.
 
 ### Map
 
