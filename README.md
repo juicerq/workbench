@@ -1,8 +1,8 @@
 # workbench
 
-`workbench` stores durable planning artifacts outside product repositories. It shares work between clones by identifying a repository from its normalized Git `origin`.
+`workbench` gives a repository's planning a durable home outside the repository, and shares it between clones by identifying the repository from its normalized Git `origin`.
 
-A work exists as soon as its directory does. Every document inside it is optional, so charting a map creates the work long before a specification exists:
+It owns two things only: where a work lives, and the state of that work's tickets. Every document body belongs to whoever is editing — an agent reads and writes these files with its own file tools, not through this CLI:
 
 - `map.md` is a wayfinder map: where a large effort is going and what it has already decided.
 - `tickets/<slug>.md` are its decision tickets, each with a title, type, state, assignee, and blockers.
@@ -10,6 +10,8 @@ A work exists as soon as its directory does. Every document inside it is optiona
 - `spec.md` is the final specification produced by `to-prd`.
 - `issues.md` is the implementation breakdown produced by `to-tasks`.
 - `learnings.md` exists only when one implementation task discovers information that later tasks need.
+
+A work exists as soon as its directory does and every document inside it is optional, so charting a map creates the work long before a specification exists.
 
 Agent execution, task state, ownership, checkpoints, evidence, Git context, and conversation focus belong to the harness and are not stored here.
 
@@ -23,53 +25,36 @@ bun install --global github:juicerq/workbench
 
 ## Commands
 
-Every command takes the product repository through `--repo` and prints one line of JSON. Document bodies always arrive through `--content-file`.
+Every command takes the product repository through `--repo` and prints one line of JSON. `workbench --help` prints the same list.
 
 ### Work
 
 ```sh
-workbench create --repo "$PWD" --name <work-name> [--content-file <spec-path>]
 workbench list --repo "$PWD"
-workbench read --repo "$PWD" --work <work-id>
-workbench write --repo "$PWD" --work <work-id> --artifact <spec|issues|learnings> --content-file <path>
-workbench remove --repo "$PWD" --work <work-id> [--artifact <issues|learnings>]
+workbench work --repo "$PWD" --name <work-name>
 ```
 
-`create` derives the work ID from `--name`. `list` reports each work's artifacts and its map's state. `read` locates a work: for each of `map.md`, `spec.md`, `issues.md`, and `learnings.md` that is present it returns the file's size in bytes and its absolute path, never the content and never a ticket. Open the path to read a body, and read only the part you need. `write` accepts only non-blank content and preserves it exactly. `remove --artifact` removes only `issues.md` or `learnings.md`; omit `--artifact` to remove the whole work.
-
-### Map
-
-```sh
-workbench map write --repo "$PWD" --work <work-id> --content-file <body-path>
-workbench map state --repo "$PWD" --work <work-id> --state <open|closed>
-```
-
-A work holds at most one map. The CLI owns its frontmatter and a body write replaces the body whole. A map is removed only by removing its work.
+`work` derives the work ID from `--name`, creates the directory when it is missing, and prints that directory, whether it had to create it, and the documents already there. Write `map.md`, `spec.md`, `issues.md`, `learnings.md`, and anything else into it yourself, and read them the same way — reading only the part you need, because a specification and a breakdown are long. `list` reports every work with its directory, its documents, and how many tickets it holds. Remove a work by deleting its directory.
 
 ### Tickets
 
 ```sh
-workbench ticket create --repo "$PWD" --work <work-id> --title <title> --type <research|prototype|grilling|task> [--content-file <path>] [--blocked-by <slug>,<slug>]
+workbench ticket create --repo "$PWD" --work <work-id> --title <title> --type <research|prototype|grilling|task> [--blocked-by <slug>,<slug>]
 workbench ticket block --repo "$PWD" --work <work-id> --ticket <slug> --blocked-by <slug>,<slug>
 workbench ticket claim --repo "$PWD" --work <work-id> --ticket <slug> --assignee <dev>
-workbench ticket close --repo "$PWD" --work <work-id> --ticket <slug> --content-file <resolution-path> [--replace]
+workbench ticket close --repo "$PWD" --work <work-id> --ticket <slug>
 workbench ticket read --repo "$PWD" --work <work-id> --ticket <slug>
 workbench ticket remove --repo "$PWD" --work <work-id> --ticket <slug>
 workbench frontier --repo "$PWD" --work <work-id>
 ```
 
-A ticket's slug comes from its title, using the same derivation as the work ID. Blocking is recorded only on the blocked ticket; `ticket read` derives the reverse direction. `ticket claim` overwrites any existing assignee and never fails. `ticket close` writes the resolution into the body and closes the ticket in one call, and refuses to close without one. Closing an already closed ticket fails; `--replace` rewrites its resolution in place. `frontier` returns the open, unclaimed tickets whose blockers are all closed, as slug, title, and type.
+A ticket's slug comes from its title, using the same derivation as the work ID. `ticket create` writes the frontmatter and a `## Question` heading, then returns the file's path: the question and the resolution are written into that file directly. The CLI rewrites the frontmatter on every state change and never touches the body.
 
-### Assets
-
-```sh
-workbench asset write --repo "$PWD" --work <work-id> --name <asset-name> --content-file <path>
-workbench asset read --repo "$PWD" --work <work-id> --name <asset-name>
-```
+Blocking is recorded only on the blocked ticket; `ticket read` derives the reverse direction and returns the ticket's fields and path, never its body. `ticket claim` overwrites any existing assignee and never fails. `ticket close` refuses a ticket whose body carries no `## Resolution` section with content under it; correcting a resolution is an edit to the file, and closing again is allowed. `frontier` returns the open, unclaimed tickets whose blockers are all closed, as slug, title, and type.
 
 ## Storage
 
-Set `WORKBENCH_HOME` to use a dedicated data root. Otherwise data lives under `$XDG_DATA_HOME/workbench`, or `~/.local/share/workbench` when `XDG_DATA_HOME` is unset. New directories are private to the current user and files are written atomically.
+Set `WORKBENCH_HOME` to use a dedicated data root. Otherwise data lives under `$XDG_DATA_HOME/workbench`, or `~/.local/share/workbench` when `XDG_DATA_HOME` is unset. New directories are private to the current user and ticket files are written atomically.
 
 Work lives in a `v2` namespace. Legacy work is never scanned, migrated, or removed; there is no automatic cleanup.
 

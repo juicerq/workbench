@@ -2,6 +2,8 @@
 
 Durable planning storage for a single developer's agent sessions. It holds what a repository's planning has decided, outside the repository itself, so the knowledge survives clones, worktrees, and the end of a conversation.
 
+The CLI owns a work's location and its tickets' state. Every document body belongs to whoever is editing it, through ordinary file tools.
+
 ## Language
 
 **Repository**:
@@ -9,7 +11,7 @@ A product codebase, identified by its normalized Git `origin` rather than by a l
 _Avoid_: project, clone, repo path
 
 **Work**:
-One initiative inside a repository, addressed by a stable identifier. It is the only unit that can be created, listed, read, or removed as a whole.
+One initiative inside a repository, addressed by a stable identifier. It is a directory: opening one by name creates it when it is missing.
 _Avoid_: bundle, item, initiative, effort
 
 **Artifact**:

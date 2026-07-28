@@ -15,6 +15,7 @@ import {
 	type TicketRemoveInput,
 } from "./schemas"
 
+const questionHeading = "## Question"
 const resolutionHeading = "## Resolution"
 
 interface StoredTicket extends Ticket {
@@ -59,12 +60,11 @@ async function writeTicket(workDirectory: string, ticket: StoredTicket) {
 	)
 }
 
-function withResolution(body: string, content: string) {
+function hasResolution(body: string) {
 	const lines = body.split("\n")
 	const heading = lines.indexOf(resolutionHeading)
-	const question = (heading === -1 ? lines : lines.slice(0, heading)).join("\n").trim()
 
-	return `${question}\n\n${resolutionHeading}\n\n${content.trim()}`.trim()
+	return heading !== -1 && lines.slice(heading + 1).join("\n").trim().length > 0
 }
 
 async function requireBlockers(workDirectory: string, ticket: string, blockers: string[]) {
@@ -91,14 +91,19 @@ export const Tickets = {
 		await requireBlockers(work.directory, ticket, input.blockedBy)
 		await writeTicket(work.directory, {
 			blockedBy: input.blockedBy,
-			body: input.content ?? "",
+			body: questionHeading,
 			slug: ticket,
 			state: "open",
 			title: input.title,
 			type: input.type,
 		})
 
-		return { blockedBy: input.blockedBy, id: work.id, slug: ticket }
+		return {
+			blockedBy: input.blockedBy,
+			id: work.id,
+			path: ticketPath(work.directory, ticket),
+			slug: ticket,
+		}
 	},
 
 	async block(input: TicketBlockInput) {
@@ -124,17 +129,15 @@ export const Tickets = {
 		const work = await workLocation(input)
 		const ticket = await readTicket(work.directory, input.ticket)
 
-		if (ticket.state === "closed" && !input.replace) {
+		if (!hasResolution(ticket.body)) {
 			throw new Error(
-				`Ticket ${input.ticket} is already closed; pass --replace to rewrite its resolution`,
+				`Ticket ${ticket.slug} has no ${resolutionHeading} section; write the resolution into ${
+					ticketPath(work.directory, ticket.slug)
+				} before closing it`,
 			)
 		}
 
-		await writeTicket(work.directory, {
-			...ticket,
-			body: withResolution(ticket.body, input.content),
-			state: "closed",
-		})
+		await writeTicket(work.directory, { ...ticket, state: "closed" })
 
 		return { id: work.id, slug: ticket.slug, state: "closed" }
 	},
@@ -149,12 +152,18 @@ export const Tickets = {
 		}
 
 		return {
-			...ticket,
+			assignee: ticket.assignee,
+			blockedBy: ticket.blockedBy,
 			blocks: tickets
 				.filter((entry) => entry.blockedBy.includes(ticket.slug))
 				.map((entry) => entry.slug)
 				.sort(),
 			id: work.id,
+			path: ticketPath(work.directory, ticket.slug),
+			slug: ticket.slug,
+			state: ticket.state,
+			title: ticket.title,
+			type: ticket.type,
 		}
 	},
 
